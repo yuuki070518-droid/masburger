@@ -2,8 +2,11 @@
 <html lang="ja">
 <head>
 <meta charset="utf-8">
+<meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self' 'sha256-5sYP2YPdHcCT/MwhJUR0xd9ix+BEjMfr5NeEc8OXa+I=' 'sha256-HXbGvDn2jY2JtLbrHV0c2bThq5VO8DWg87ib728QZdk='; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' https://fonts.gstatic.com; img-src 'self' data: blob:; media-src 'self' data: blob:; worker-src 'self' blob:; connect-src 'self' data: blob: wss://broker.emqx.io:8084 wss://broker.hivemq.com:8884; object-src 'none'; base-uri 'none'; form-action 'self'">
+<meta name="referrer" content="no-referrer">
 <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
 <style>html,body{margin:0;height:100%}body{font:14px system-ui,sans-serif}img{max-width:100%}[hidden]{display:none!important}</style>
+<script src="security.js"></script>
 <script src="lib/mqtt.min.js"></script>
 <script src="net.js"></script>
 <script>/* ダブルクリック（file://）で開いたときは、画像やモデルを直接読めないので埋め込み版を読む */if(location.protocol==='file:')document.write('<script src="assets/bundle.js"><\/script>');</script>
@@ -162,6 +165,8 @@ button:disabled{opacity:.4;cursor:not-allowed}
 .dbg-pill{background:var(--ketchup)!important;border-color:var(--ketchup)!important;color:#fff}
 @media (prefers-reduced-motion:reduce){.live::before{animation:none}.sw,.sw::after{transition:none}}
 @media (max-width:640px){#rail{width:160px}#keys{display:none}}
+#latencyPanel{position:fixed;z-index:40;top:12%;left:50%;transform:translateX(-50%);box-sizing:border-box;width:min(420px,90vw);padding:18px;background:var(--ink);color:var(--cream);border:1px solid var(--line);border-radius:12px;pointer-events:none}
+#latencyPanel h2{margin:0 0 10px;font-size:18px}#latencyPanel .net-row{display:flex;justify-content:space-between;gap:16px;padding:6px 0}
 </style>
 
 <canvas id="c" tabindex="0"></canvas>
@@ -173,6 +178,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
 <div class="hud pill" id="held"><small>手元</small>なし</div>
 <div class="hud" id="keys"></div>
 <div class="hud" id="toasts"></div>
+<div id="latencyPanel" hidden role="status"><h2>通信状況</h2><div id="latencyRows"></div><p class="note">あなたと各プレイヤー間の往復遅延（RTT）。Tab を離すと閉じます。</p></div>
 <div class="hud" id="relock" hidden>クリックで操作に戻る<small>ゲームは進行中です</small></div>
 <div class="hud pill" id="fps" hidden></div>
 <div class="hud" id="players"></div>
@@ -221,7 +227,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
       </div>
       <form class="row" id="roomJoin" hidden style="margin-top:8px">
         <label for="roomInput" class="note" style="margin:0">ルーム番号で入る</label>
-        <input id="roomInput" maxlength="16" autocomplete="off" placeholder="例：ab12cd" style="font:inherit;font-weight:700;width:120px;background:var(--ink);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:8px">
+        <input id="roomInput" maxlength="32" autocomplete="off" placeholder="例：ab12cd" style="font:inherit;font-weight:700;width:120px;background:var(--ink);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:8px">
         <button class="primary" id="btnJoinRoom" type="submit">このルームに入る</button>
       </form>
       <input id="inviteUrl" readonly hidden style="width:100%;margin-top:6px;font:inherit;font-size:12px;background:var(--ink);color:var(--cream);border:1px solid var(--line);border-radius:6px;padding:6px">
@@ -237,7 +243,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <h2 id="setTitle" style="margin:0">設定</h2>
       <span class="live" id="liveTag">ゲーム進行中</span>
     </div>
-    <p class="note" style="margin:4px 0 0">設定を開いていても時間は止まりません。マルチプレイで全員の時間がずれないようにするためです。</p>
+    <p class="note" style="margin:4px 0 0">ソロでは設定中に時間が止まります。マルチでは設定中も時間が進みます。</p>
     <div class="set-group">
       <h3>操作</h3>
       <label class="set-row" for="optSens"><span>マウス感度</span><input type="range" id="optSens" min="0.3" max="2.5" step="0.1"><output id="valSens"></output></label>
@@ -247,7 +253,7 @@ button:disabled{opacity:.4;cursor:not-allowed}
       <h3>キー設定 <small style="font-weight:400;letter-spacing:0">ボタンを押してから、割り当てたいキーを押す</small></h3>
       <div id="keyList" class="key-list"></div>
       <div class="row" style="margin-top:6px"><button id="btnKeyReset">初期設定に戻す</button><button id="btnFull">全画面にする</button></div>
-      <p class="note" style="margin:4px 0 0">Esc はブラウザが全画面の解除とマウスの解放に使うため、ゲームの操作には割り当てられません。</p>
+      <p class="note" style="margin:4px 0 0">Esc は設定、Tab は通信状況の表示に使います。この2つは固定です。</p>
     </div>
     <div class="set-group">
       <h3>画質</h3>
@@ -406,14 +412,18 @@ let S=load()||fresh();
 const yen=n=>'¥'+Math.round(n).toLocaleString('ja-JP');
 
 /* ---------- 設定 ---------- */
+const SAFE=window.BUNBUN_SAFE;
 const CFG_KEY='bunbun-settings-v1';
 // キー割り当て（設定画面で変更できる。値は KeyboardEvent.code）
-const KEY_DEF={fwd:'KeyW',back:'KeyS',left:'KeyA',right:'KeyD',dash:'ShiftLeft',crouch:'KeyC',jump:'Space',use:'KeyE',undo:'KeyQ',wrap:'KeyT',settings:'Tab',full:'KeyF'};
-const KEY_N={fwd:'前進',back:'後退',left:'左へ',right:'右へ',dash:'ダッシュ（押している間）',crouch:'しゃがむ（押している間）',jump:'ジャンプ',use:'使う・置く',undo:'具材を戻す',wrap:'包む',settings:'設定を開く・閉じる',full:'全画面の切り替え'};
-const keyLabel=c=>{if(!c)return '—';const m={Space:'Space',Tab:'Tab',ShiftLeft:'左Shift',ShiftRight:'右Shift',ControlLeft:'左Ctrl',ControlRight:'右Ctrl',AltLeft:'左Alt',AltRight:'右Alt',MetaLeft:'左⌘',MetaRight:'右⌘',CapsLock:'Caps',Enter:'Enter',Backspace:'BS',ArrowUp:'↑',ArrowDown:'↓',ArrowLeft:'←',ArrowRight:'→',Backquote:'`',Minus:'-',Equal:'=',BracketLeft:'[',BracketRight:']',Semicolon:';',Quote:"'",Comma:',',Period:'.',Slash:'/',Backslash:'\\'};
+const KEY_DEF={fwd:'KeyW',back:'KeyS',left:'KeyA',right:'KeyD',dash:'ShiftLeft',crouch:'KeyC',jump:'Space',use:'KeyE',undo:'KeyQ',wrap:'KeyT',settings:'Escape',latency:'Tab',full:'KeyF'};
+const KEY_N={fwd:'前進',back:'後退',left:'左へ',right:'右へ',dash:'ダッシュ（押している間）',crouch:'しゃがむ（押している間）',jump:'ジャンプ',use:'使う・置く',undo:'具材を戻す',wrap:'包む',settings:'設定を開く・閉じる',latency:'通信状況（押している間）',full:'全画面の切り替え'};
+const keyLabel=c=>{if(!c)return '—';const m={Escape:'Esc',Space:'Space',Tab:'Tab',ShiftLeft:'左Shift',ShiftRight:'右Shift',ControlLeft:'左Ctrl',ControlRight:'右Ctrl',AltLeft:'左Alt',AltRight:'右Alt',MetaLeft:'左⌘',MetaRight:'右⌘',CapsLock:'Caps',Enter:'Enter',Backspace:'BS',ArrowUp:'↑',ArrowDown:'↓',ArrowLeft:'←',ArrowRight:'→',Backquote:'`',Minus:'-',Equal:'=',BracketLeft:'[',BracketRight:']',Semicolon:';',Quote:"'",Comma:',',Period:'.',Slash:'/',Backslash:'\\'};
   return m[c]||c.replace(/^Key/,'').replace(/^Digit/,'').replace(/^Numpad/,'テンキー');};
 const CFG=Object.assign({sens:1,fov:70,shadows:true,scale:1,fps:false,sound:true,infStock:false,infPat:false},(()=>{try{return JSON.parse(localStorage.getItem(CFG_KEY))||{};}catch(e){return {};}})());
+// 旧版の Tab 設定を移行する。Tab/Esc はメニュー用に予約する。
 CFG.keys=Object.assign({},KEY_DEF,CFG.keys||{});
+for(const k of Object.keys(KEY_DEF))if(k!=='settings'&&k!=='latency'&&['Escape','Tab'].includes(CFG.keys[k]))CFG.keys[k]=KEY_DEF[k];
+CFG.keys.settings='Escape';CFG.keys.latency='Tab';
 function saveCfg(){try{localStorage.setItem(CFG_KEY,JSON.stringify(CFG));}catch(e){}}
 // ゲーム進行用の乱数（シード付き）。同じ日・同じシードなら全員に同じお客さんと注文が出る
 function mulberry32(a){return()=>{a|=0;a=a+0x6D2B79F5|0;let t=Math.imul(a^a>>>15,1|a);t=t+Math.imul(t^t>>>7,61|t)^t;return((t^t>>>14)>>>0)/4294967296;};}
@@ -461,7 +471,7 @@ function loopVol(sources,base){
 }
 function updateLoops(){
   if(!AC)return;
-  const on=CFG.sound&&active();
+  const on=CFG.sound&&active()&&!gamePaused();
   const gs=[];if(on)grill.forEach((g,i)=>{if(g.cook!==null)gs.push([GX(i),-5.55]);});
   const fs=[];if(on)fry.forEach((f,i)=>{if(f.t!==null)fs.push([baskets[i].x,-5.6]);});
   const t=AC.currentTime;
@@ -1514,7 +1524,7 @@ function resetStations(){
   customers.forEach(c=>disposeCustomer(c.mesh));customers=[];
   slots=[0,1,2,3].map(()=>({c:null,placed:emptyPlaced(),dirty:true}));
   tables=TBL.map(()=>null);tableTray=TBL.map(()=>null);tableDirty=true;
-  held=null;if(MP)MP.heldOf={};refreshHeld();bottleStands.forEach(m=>m.visible=true);if(typeof clearFree==='function')clearFree();
+  held=null;if(MP)MP.heldOf=Object.create(null);refreshHeld();bottleStands.forEach(m=>m.visible=true);if(typeof clearFree==='function')clearFree();
   DS={served:0,lost:0,revenue:0,tips:0,waste:0,wrong:0,reviews:[],rating0:S.rating,spent:DS?DS.spent:0,cleaned:0,returned:0,eatDone:0,turned:0};
   for(let i=0;i<3;i++)drawSlotSign(i);
 }
@@ -1679,15 +1689,32 @@ function setNzTag(mesh,on){
     const sp=new THREE.Sprite(new THREE.SpriteMaterial({map:nzTex,depthTest:false,transparent:true}));sp.scale.set(.6,.225,1);sp.position.y=mesh.userData.topY+.32;sp.renderOrder=6;mesh.add(sp);mesh.userData.nz=sp;}
   if(mesh.userData.nz)mesh.userData.nz.visible=!!on;
 }
-// 見た目はシードで決まる（全員の画面で同じ人）。車椅子の人もいる
-function customerLook(seed){const rr=mulberry32(seed>>>0);return {name:PEOPLE[rr()*PEOPLE.length|0],wheel:rr()<.08,rr};}
+// 見た目はシードで決まる。別の乱数列で20%を抽選し、従来の人物の選び方は保つ。
+const CLAWD_RATE=.2,CLAWD_HEIGHT=1.8;
+function customerLook(seed){const rr=mulberry32(seed>>>0),clawd=mulberry32((seed^0x434c4157)>>>0)()<CLAWD_RATE;return {name:PEOPLE[rr()*PEOPLE.length|0],wheel:!clawd&&rr()<.08,clawd,rr};}
+// Clawd をイメージした立体の客。共有ジオメトリ・素材だけで作り、人型モデルと同じ高さにする。
+function clawdBody(){
+  const root=new THREE.Group(),orange='#d97757',legs=[];
+  box(.96,.84,.52,orange,0,1.08,0,root);
+  [-1,1].forEach(side=>{
+    box(.16,.4,.4,orange,side*.56,.9,0,root);
+    box(.10,.18,.025,'#201815',side*.23,1.15,.272,root);
+  });
+  [-.36,-.12,.12,.36].forEach((x,i)=>{
+    const pivot=new THREE.Group();pivot.position.set(x,.66,0);root.add(pivot);
+    box(.13,.66,.18,orange,0,-.33,0,pivot);legs.push(pivot);
+  });
+  root.scale.setScalar(CLAWD_HEIGHT/1.5);
+  root.userData.legs=legs;root.userData.time=0;return shade(root);
+}
 function setCustomerBody(g){
   const L=g.userData.look;
   if(g.userData.body){g.remove(g.userData.body.root);disposeBody(g.userData.body);g.userData.body=null;}
   if(g.userData.boxB){g.remove(g.userData.boxB);g.userData.boxB=null;}
-  if(CH.ready){const b=makeBody(L.name,L.wheel);g.add(b.root);g.userData.body=b;bodyPlay(b,g.userData.anim||'idle');}
+  if(L.clawd){g.userData.boxB=clawdBody();g.add(g.userData.boxB);}
+  else if(CH.ready){const b=makeBody(L.name,L.wheel);g.add(b.root);g.userData.body=b;bodyPlay(b,g.userData.anim||'idle');}
   else{g.userData.boxB=boxBody(L.rr);g.add(g.userData.boxB);}
-  g.userData.topY=CH.ready?CH.H+(L.wheel?-.1:0):1.85;
+  g.userData.topY=L.clawd?CLAWD_HEIGHT:CH.ready?CH.H+(L.wheel?-.1:0):1.85;
   g.userData.mood.position.y=g.userData.topY+.12;if(g.userData.nz)g.userData.nz.position.y=g.userData.topY+.32;
 }
 // 頭の上の機嫌の印：1 黄（待ちくたびれ）2 赤（怒り）3 緑（満足）
@@ -1713,6 +1740,14 @@ function setCarry(g,kind){
 }
 // 毎フレーム：今の動き（anim）を再生する。ホストでも参加者でも同じ
 function animateCustomer(g,anim,dt){
+  if(g.userData.look.clawd){
+    g.userData.anim=anim;const m=g.userData.boxB;m.userData.time+=dt;const t=m.userData.time;
+    const walk=anim==='walk',sit=anim==='sit';
+    m.userData.legs.forEach((leg,i)=>{leg.rotation.x=sit?-Math.PI/2:walk?Math.sin(t*10+i*Math.PI)*.4:0;});
+    m.position.y=sit?-.16:walk?Math.abs(Math.sin(t*10))*.025:0;
+    m.rotation.z=anim==='emote-yes'?Math.sin(t*12)*.09:anim==='emote-no'?Math.sin(t*14)*.15:0;
+    return;
+  }
   g.userData.anim=anim;const b=g.userData.body;if(!b)return;
   bodyPlay(b,anim);bodyTick(b,dt);
 }
@@ -2141,29 +2176,35 @@ const ratingMult=()=>.85+(S.rating-1)/4*.3; // 評判1で我慢0.85倍、評判5
 
 /* ---------- 視点・移動 ---------- */
 const keys={};let yaw=Math.PI,pitch=-.15;const P={x:0,z:-1.4};
-let hoverPt=null,locked=false,lockedOnce=false,fallback=!canvas.requestPointerLock,uiOpen=false,hover=null,setOpenAt=0;
+let hoverPt=null,locked=false,lockedOnce=false,fallback=!canvas.requestPointerLock,uiOpen=false,hover=null;
 const active=()=>phase==='prep'||phase==='open'||phase==='closing';
-// 入力を受け付けるか（ゲームの進行とは無関係。進行は止まらない）
-const running=()=>active()&&!uiOpen&&(locked||fallback);
+const roomPlayers=()=>MP&&MP.room?MP.room.peers().filter(p=>p.kind==='viewer'&&p.presence&&p.presence.pl):[];
+const isMultiplayer=()=>roomPlayers().length>1;
+const gamePaused=()=>active()&&!isClient()&&!isMultiplayer()&&!$('#settings').hidden;
+const running=()=>active()&&!uiOpen&&!gamePaused()&&(locked||fallback);
+function clearGameInput(){for(const k in keys)keys[k]=false;MV.jumpReq=false;MV.moving=false;drag=null;}
 function lock(){
   if(fallback||locked)return;
   try{const r=canvas.requestPointerLock();if(r&&r.catch)r.catch(()=>{if(!lockedOnce)fallback=true;});}catch(e){if(!lockedOnce)fallback=true;}
 }
 document.addEventListener('pointerlockchange',()=>{
-  // マウスが解放されても設定は開かない（「クリックで操作に戻る」を出すだけ）。設定は設定キーで開く
+  const wasLocked=locked;
   locked=document.pointerLockElement===canvas;if(locked)lockedOnce=true;
+  // Esc がブラウザに消費され、keydown が届かない場合にも設定を開く。
+  if(wasLocked&&!locked&&active()&&!uiOpen)openSettings();
 });
 document.addEventListener('pointerlockerror',()=>{if(!lockedOnce)fallback=true;});
 let drag=null;
 canvas.addEventListener('mousedown',e=>{
   ensureAudio();
-  if(!active()||uiOpen)return;
+  if(!active()||uiOpen||gamePaused())return;
   if(locked){if(e.button===0)interact();else if(e.button===2)undo();return;}
   if(fallback){drag={x:e.clientX,y:e.clientY,moved:0};return;}
   lock();
 });
 window.addEventListener('mouseup',e=>{if(drag&&drag.moved<5)interact();drag=null;});
 window.addEventListener('mousemove',e=>{
+  if(uiOpen||gamePaused())return;
   let mx=0,my=0;
   if(locked){mx=e.movementX;my=e.movementY;}
   else if(drag){mx=e.clientX-drag.x;my=e.clientY-drag.y;drag.moved+=Math.abs(mx)+Math.abs(my);drag.x=e.clientX;drag.y=e.clientY;}
@@ -2183,9 +2224,20 @@ const isTyping=e=>e.target&&(e.target.tagName==='INPUT'||e.target.tagName==='TEX
 let rebind=null; // キー変更待ちの項目
 window.addEventListener('keydown',e=>{
   if(rebind){e.preventDefault();e.stopImmediatePropagation();
-    if(e.code!=='Escape'){const K=CFG.keys,old=K[rebind];for(const k in K)if(k!==rebind&&K[k]===e.code)K[k]=old; // 重なったら入れ替える
+    if(!['Escape','Tab'].includes(e.code)){const K=CFG.keys,old=K[rebind];for(const k in K)if(k!==rebind&&K[k]===e.code)K[k]=old; // 重なったら入れ替える
       K[rebind]=e.code;saveCfg();}
     rebind=null;drawKeyList();drawKeyHint();return;}
+  // Esc は入力欄にフォーカスがあるときも閉じられる。
+  if(e.code==='Escape'){
+    e.preventDefault();if(e.repeat)return;
+    if(!$('#settings').hidden)closeSettings();
+    else if(!$('#tablet').hidden)closeTablet(false);
+    else if(active())openSettings();
+    return;
+  }
+  if(e.code==='Tab'&&isMultiplayer()&&$('#settings').hidden&&$('#tablet').hidden){
+    e.preventDefault();if(!e.repeat){$('#latencyPanel').hidden=false;drawLatency();}return;
+  }
   if(isTyping(e))return;
   const K=CFG.keys;keys[e.code]=true;
   const game=Object.values(K).includes(e.code)||e.code.startsWith('Arrow');
@@ -2196,23 +2248,13 @@ window.addEventListener('keydown',e=>{
   if(e.code===K.wrap&&running())wrapKey();
   if(e.code===K.jump&&running())MV.jumpReq=true;
   if(e.code===K.full)toggleFullscreen();
-  if(e.code===K.settings){
-    if(!$('#settings').hidden){if(performance.now()-setOpenAt>200)closeSettings();}
-    else if(!$('#tablet').hidden)closeTablet();
-    else if(active())openSettings();
-  }
-  // Esc は開いている画面を閉じるだけ（全画面の解除やマウスの解放はブラウザが行う）
-  if(e.code==='Escape'){
-    if(!$('#settings').hidden)closeSettings();
-    else if(!$('#tablet').hidden)closeTablet();
-  }
 });
-window.addEventListener('keyup',e=>{keys[e.code]=false;});
+window.addEventListener('keyup',e=>{keys[e.code]=false;if(e.code==='Tab')$('#latencyPanel').hidden=true;});
 canvas.addEventListener('contextmenu',e=>e.preventDefault());
-function undo(){if(!hover)return;const u=hover.userData;if(u.kind!=='board'&&u.kind!=='free')return;
+function undo(){if(!hover||!running())return;const u=hover.userData;if(u.kind!=='board'&&u.kind!=='free')return;
   if(isClient()){sendAct(['undo',u.idx,u.kind==='board'?0:1]);toastTarget=MP.me;predRun(u.kind+':'+u.idx,()=>{if(u.kind==='board')boardUndo(u.idx);else freeUndo(u.idx);});toastTarget='*';refreshHeld();return;}
   toastTarget=MP.me||'*';try{if(u.kind==='board')boardUndo(u.idx);else freeUndo(u.idx);}finally{toastTarget='*';}refreshHeld();}
-window.addEventListener('blur',()=>{for(const k in keys)keys[k]=false;});
+window.addEventListener('blur',()=>{clearGameInput();$('#latencyPanel').hidden=true;});
 
 const SOLIDS=[[HW-.8,HW,-3.35,-1.55],[-(HW-1.2)-.05,-1.65,FZ-.95,FZ+.1],[DTRASH.x-.47,RETURN.x+.47,FZ-.57,FZ+.1],[-HW,-(HW-.8),FZ-.8,FZ+.1],[HW-.85,HW,FZ-.8,FZ+.1],[-HW,-(HW-.8),.55,1.15],[HW-.75,HW,1.8,2.4],[-3.2,1.2,-3.2,-2.0,.94],[HW-.95,HW-.35,-4.7,-4.1],[-HW,CE,-.35,.35,1.06],[5.3,5.9,2.35,2.85],
   // テーブル（天板 .775）と椅子（座面 .51）は、ジャンプで上に乗ったり飛び越えたりできる
@@ -2382,7 +2424,7 @@ function drawRail(){
 /* ---------- 発注端末 ---------- */
 let shopTab='supply';
 function openTablet(){uiOpen=true;if(document.pointerLockElement)document.exitPointerLock();$('#tablet').hidden=false;drawShop();}
-function closeTablet(){$('#tablet').hidden=true;uiOpen=false;if(active())lock();}
+function closeTablet(relock=true){$('#tablet').hidden=true;uiOpen=false;if(relock&&active()&&!gamePaused())lock();}
 function drawShop(){
   $('#tabMoney').innerHTML=`<small>所持金</small><b>${yen(S.money)}</b>`;
   $('#tabSupply').setAttribute('aria-pressed',shopTab==='supply');$('#tabUpg').setAttribute('aria-pressed',shopTab==='upg');$('#tabMenu').setAttribute('aria-pressed',shopTab==='menu');$('#tabRep').setAttribute('aria-pressed',shopTab==='rep');
@@ -2417,7 +2459,8 @@ $('#tabMenu').onclick=()=>{shopTab='menu';drawShop();};
 function buyMenu(i){const u=MENU_UP[i];if(!u||S.money<u.price||S.up[u.k])return;S.money-=u.price;S.up[u.k]=true;DS&&(DS.spent+=u.price);sfx('good');applyUpgrades();save();
   toast(`新メニュー「${u.n}」を始めました！お客さんが注文するようになります`,'good');}
 $('#tabRep').onclick=()=>{shopTab='rep';drawShop();};
-function reviewRows(list){return list.length?list.map(v=>`<div class="rv"><span class="stars">${'★'.repeat(v.s)}<i>${'☆'.repeat(5-v.s)}</i></span><span class="rv-t">「${v.t}」<small>DAY ${v.d}・#${v.no}</small></span><span class="rv-d ${v.dl<0?'neg':''}">${v.dl>=0?'+':''}${v.dl.toFixed(2)}</span></div>`).join(''):'<p class="note">まだ口コミはありません。</p>';}
+const escapeHTML=s=>String(s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+function reviewRows(list){return list.length?list.map(v=>`<div class="rv"><span class="stars">${'★'.repeat(v.s)}<i>${'☆'.repeat(5-v.s)}</i></span><span class="rv-t">「${escapeHTML(v.t)}」<small>DAY ${v.d}・#${v.no}</small></span><span class="rv-d ${v.dl<0?'neg':''}">${v.dl>=0?'+':''}${v.dl.toFixed(2)}</span></div>`).join(''):'<p class="note">まだ口コミはありません。</p>';}
 function repHTML(){
   const R=S.reviews||[],dist=[5,4,3,2,1].map(n=>[n,R.filter(v=>v.s===n).length]),mx=Math.max(1,...dist.map(d=>d[1]));
   return `<div class="rep-head"><div class="rep-big">${S.rating.toFixed(1)}</div><div><div class="stars" style="font-size:20px">${starStr(S.rating)}</div>
@@ -2577,7 +2620,7 @@ function drawStations(time,dt){
 // ゲーム進行は実時間に固定刻みで追従する。描画が遅れても、タブが裏に回っても、時間は失われず後から追いつく
 const TICK=1/60;let simAcc=0,simClock=performance.now(),simTicks=0;
 function simStep(dt){
-  if(!active()||isClient())return;
+  if(!active()||isClient()||gamePaused())return;
   simTicks++;updateStations(dt);updateCustomers(dt);updateDay(dt);
 }
 // 参加者：ホストの状態が届く間（0.1秒）も、焼き色・揚げ時間・時計・待ち時間のバーを手元で進めて滑らかに見せる。
@@ -2588,7 +2631,9 @@ function clientAdvance(dt){
   if(!MP.inf[1])slots.forEach(s=>{if(s.c&&s.c.order&&s.c.pat>0)s.c.pat=Math.max(0,s.c.pat-dt);});
 }
 function pump(){
-  const now=performance.now();simAcc+=Math.max(0,(now-simClock)/1000);simClock=now;
+  const now=performance.now();
+  if(gamePaused()){simClock=now;simAcc=0;return;} // 停止時間を再開後に早送りしない
+  simAcc+=Math.max(0,(now-simClock)/1000);simClock=now;
   let n=0;while(simAcc>=TICK&&n<1800){simStep(TICK);simAcc-=TICK;n++;}
 }
 // 裏タブで描画が止まっても進行は続ける（Worker の時計：ブラウザの裏タブ制限で1Hzに落ちない）
@@ -2598,17 +2643,20 @@ function loop(now){
   const w0=performance.now();
   const rawDt=Math.min(1,Math.max(0,(now-last)/1000)),dt=Math.min(.05,rawDt);last=now;
   pump();
+  const paused=gamePaused();
+  if(paused)clearGameInput();
+  if(!$('#latencyPanel').hidden)drawLatency();
   if(MP.room&&isClient()&&active())clientAdvance(dt);
   if(running())movePlayer(dt);
   if((tick+=dt)>.2){tick=0;if(active()){drawRail();drawStats();drawTickets();drawBoard();}}
   camera.position.set(P.x,1.62-.6*MV.cr+MV.y,P.z);camera.rotation.set(pitch,yaw,0);
   {const fv=CFG.fov+MV.sprint*7;if(Math.abs(camera.fov-fv)>.05){camera.fov=fv;camera.updateProjectionMatrix();}} // 走ると少し視野が広がる
   if(heldMesh)heldMesh.position.y=-.3+Math.sin(now*.004)*.006;
-  if(active()){updateHover();drawStations(now,dt);tickClock();}
+  if(active()){updateHover();drawStations(now,paused?0:dt);tickClock();}
   drawSign();
-  if(!isClient()){customers.forEach(c=>animateCustomer(c.mesh,custAnim(c),dt));updateStools(customers.map(c=>c.mesh));}
+  if(!isClient()){customers.forEach(c=>animateCustomer(c.mesh,custAnim(c),paused?0:dt));updateStools(customers.map(c=>c.mesh));}
   {const near=g=>{g.visible=!(Math.hypot(g.position.x-P.x,g.position.z-P.z)<.42&&MV.y<1.4);};customers.forEach(c=>near(c.mesh));for(const id in MP.cust)near(MP.cust[id].mesh);}
-  $('#relock').hidden=!(active()&&!uiOpen&&!locked&&!fallback);
+  $('#relock').hidden=!(active()&&!uiOpen&&!paused&&!locked&&!fallback);
   if((loopT+=dt)>.1){loopT=0;updateLoops();}
   mpTick(rawDt); // 通信の間隔は実時間で数える（描画が遅い端末でも送信間隔が延びないように）
   fpsN++;fpsT+=rawDt;if(fpsT>=.5){const f=fpsN/fpsT,wk=workMs/fpsN;if(CFG.fps)$('#fps').textContent=`${Math.round(f)} FPS ・ 処理 ${wk.toFixed(1)}ms/回`;fpsN=0;fpsT=0;workMs=0;
@@ -2624,9 +2672,9 @@ function loop(now){
 // しくみ：このページを開いている人が同じ店に入る。最初に店を開いた人が「店長（ホスト）」になり、
 // 時間・お客さん・調理・お金をホストだけが進める。他の人は自分の操作をホストに送り、
 // ホストが結果の状態を全員に配る。ホストが抜けたら次の人が状態を引き継いで続ける。
-var MP={tmpId:0,lastActAt:0,curK:'',room:null,world:null,me:null,host:null,hostClaim:0,acts:[],actSeq:0,seen:{},lastA:{},heldOf:{},msgs:[],msgSeq:0,lastMsg:0,
-  lastG:null,lastW:null,inf:[0,0],cust:{},custSeq:1,avatars:{},nick:'',sum:null,pubT:0,posT:0,lastPos:'',heldSig:'',stockSig:'',fiCap:90,
-  epoch:null,epN:0,gSeq:0,wSeq:0,gEp:null,gQ:-1,wQ:-1,myAck:0,statusSig:'',peerSig:'',pred:{},predCur:0,interpMs:120,wAt:0,wIv:100};
+var MP={tmpId:0,lastActAt:0,curK:'',room:null,world:null,me:null,host:null,hostClaim:0,hostPinned:false,rates:Object.create(null),acts:[],actSeq:0,seen:Object.create(null),lastA:Object.create(null),heldOf:Object.create(null),msgs:[],msgSeq:0,lastMsg:0,
+  lastG:null,lastW:null,inf:[0,0],cust:Object.create(null),custSeq:1,avatars:Object.create(null),nick:'',sum:null,pubT:0,posT:0,lastPos:'',heldSig:'',stockSig:'',fiCap:90,
+  epoch:null,epN:0,gSeq:0,wSeq:0,gEp:null,gQ:-1,wQ:-1,myAck:0,statusSig:'',peerSig:'',pred:Object.create(null),predCur:0,interpMs:120,wAt:0,wIv:100};
 try{MP.nick=(localStorage.getItem('bunbun-nick')||'').slice(0,12);}catch(e){}
 if(!MP.nick)MP.nick='スタッフ'+(Math.random()*900+100|0);
 $('#nick').value=MP.nick;
@@ -2691,16 +2739,28 @@ function runAs(peer,fn){
   const sv=held;held=MP.heldOf[peer]||null;toastTarget=peer;
   try{fn();}catch(e){}finally{MP.heldOf[peer]=held;held=sv;toastTarget='*';}
 }
+function validAct(a){
+  const limits={start:1,buy:SUPPLY.length,upg:UPG.length,menu:MENU_UP.length,opensign:1,cupstack:1,
+    bin:BINS.length,grill:grillCount(),fry:fry.length,drink:drinks.length,bag:2,board:boards.length,spot:spots.length,
+    sauce:SAUCES.length,free:Number.MAX_SAFE_INTEGER,paperstack:1,surface:surfHits.length,table:TBL.length,
+    bagstack:1,traystack:1,wrap:Number.MAX_SAFE_INTEGER,slot:slotCount(),trash:2,undo:Number.MAX_SAFE_INTEGER};
+  if(!SAFE.action(a,limits))return false;
+  if(['free','wrap'].includes(a[1])||a[1]==='undo'&&a[3]===1)return !!freeById(a[2]);
+  if(a[1]==='undo'&&a[3]===0)return a[2]<boards.length;
+  return true;
+}
 function hostAct(peer,a){
+  if(!validAct(a))return;
   const [,k,i,x,z]=a;MP.curK=k;
   if(k==='start'){if(phase==='title'||phase==='summary')startDay();return;}
+  if(!active()&&!['buy','upg','menu'].includes(k))return;
   if(phase==='end')return;
   if(k==='buy'){buyItem(i);return;}
   if(k==='upg'){buyUpg(i);return;}
   if(k==='menu'){buyMenu(i);return;}
   runAs(peer,()=>{
     if(k==='undo'){if(x===0)boardUndo(i);else freeUndo(i);}
-    else if(k==='surface'){const h=surfHits[i];if(!h)return;const sv=hover,svp=hoverPt;hover=h;hoverPt={x:x/100,z:z/100};try{placeOnSurface();}finally{hover=sv;hoverPt=svp;}}
+    else if(k==='surface'){const h=surfHits[i];if(!h)return;const sv=hover,svp=hoverPt;hover=h;const [x0,x1,z0,z1]=h.userData.b;hoverPt={x:Math.max(x0+.1,Math.min(x1-.1,x/100)),z:Math.max(z0+.1,Math.min(z1-.1,z/100))};try{placeOnSurface();}finally{hover=sv;hoverPt=svp;}}
     else if(ACTS[k]&&active())ACTS[k](i);
   });
   drawBinLabels();
@@ -2708,17 +2768,22 @@ function hostAct(peer,a){
 function hostReadActs(){
   let did=false;
   MP.room.peers().forEach(p=>{
-    if(p.peer===MP.me||p.kind!=='viewer')return;
+    if(p.peer===MP.me||p.kind!=='viewer'||!p.presence||!p.presence.pl)return;
     const A=p.presence&&p.presence.a;if(!Array.isArray(A)||A===MP.lastA[p.peer])return;MP.lastA[p.peer]=A;
     // 初めて見る相手でも、まだ処理していない操作は全部実行する（番号で重複は防げる）
     const seen=MP.seen[p.peer]||0;
-    A.filter(a=>Array.isArray(a)&&+a[0]>seen).sort((x,y)=>x[0]-y[0]).forEach(a=>{MP.seen[p.peer]=+a[0];hostAct(p.peer,a);did=true;});
+    A.slice(-24).filter(a=>Array.isArray(a)&&SAFE.int(a[0],seen+1,seen+4096)).sort((x,y)=>x[0]-y[0]).forEach(a=>{
+      if(a[0]<=(MP.seen[p.peer]||0))return;
+      MP.seen[p.peer]=a[0];did=true;
+      if(!SAFE.allow(MP.rates,p.peer,performance.now()))return;
+      try{hostAct(p.peer,a);}catch(e){console.warn('不正な操作を破棄しました');}
+    });
   });
   return did;
 }
 // --- 参加者：配られた状態を反映する ---
 function applyG(g){
-  if(!g||g.v!==1)return;
+  if(!SAFE.game(g))return;
   // 店長が替わったら番号を数え直す。同じ店長なら古い番号は捨てる
   if(g.ep!==MP.gEp){MP.gEp=g.ep;MP.gQ=-1;MP.wQ=-1;}
   if(typeof g.q==='number'){if(g.q<=MP.gQ)return;MP.gQ=g.q;}
@@ -2731,7 +2796,7 @@ function applyG(g){
   S.money=sd.m;S.day=sd.d;S.rating=sd.r/100;S.orderNo=sd.o;S.tsv=sd.tv|0;
   {const nm=sd.md?'endless':'normal';const en=Array.isArray(sd.en)?{k:sd.en[0]===2?'clear':'over',day:sd.en[1],money:sd.en[2],r:sd.en[3]/100,sv:sd.en[4]}:null;
    const ch=nm!==S.mode||JSON.stringify(en)!==JSON.stringify(S.end);S.mode=nm;S.end=en;if(ch){drawMode();if(phase==='end'&&en)showEnd();}}if(S.diff!==nd){S.diff=nd;drawDiff();}if(!pend)STK.forEach((k,i)=>{S.stock[k]=(sd.st||[])[i]||0;});
-  const up={};String(sd.up||'').split(',').filter(Boolean).forEach(k=>up[k]=true);
+  const up=Object.create(null),allowedUp=new Set(UPG.concat(MENU_UP).map(u=>u.k));String(sd.up||'').split(',').filter(k=>allowedUp.has(k)).forEach(k=>up[k]=true);
   if(JSON.stringify(up)!==JSON.stringify(S.up)){S.up=up;applyUpgrades();}
   MP.inf=g.inf||[0,0];
   {
@@ -2775,7 +2840,7 @@ function clientPhase(ph,g){
   else if(ph==='end'){showEnd();}
 }
 function applyW(w){
-  if(!w)return;
+  w=SAFE.world(w);if(!w)return;
   if(w.ep!==undefined&&w.ep!==MP.gEp)return; // 別の店長のものは g が切り替わってから
   if(typeof w.q==='number'){if(w.q<=MP.wQ)return;MP.wQ=w.q;}
   {const t=performance.now();if(MP.wAt){const iv=Math.min(1000,t-MP.wAt);MP.wIv=MP.wIv*.85+iv*.15;MP.interpMs=Math.max(80,Math.min(450,MP.wIv*1.6+20));}MP.wAt=t;}
@@ -2834,11 +2899,11 @@ function becomeHost(){
     else if(si>=0){Object.assign(c,{state:'toKiosk',path:[[5.6,3.35]]});slots[si].c=c;}
     customers.push(c);MP.custSeq=Math.max(MP.custSeq,+id+1);
   }
-  MP.cust={};
+  MP.cust=Object.create(null);
   slots.forEach(sl=>{if(sl.c&&!customers.includes(sl.c)){sl.c=null;sl.placed=emptyPlaced();}});
-  MP.heldOf={};if(g&&g.hd)for(const p in g.hd){if(p!==MP.me)MP.heldOf[p]=decI(g.hd[p]);}
+  MP.heldOf=Object.create(null);if(g&&g.hd)for(const p in g.hd){if(p!==MP.me)MP.heldOf[p]=decI(g.hd[p]);}
   // 前の店長が処理済みの操作は引き継ぐ（同じ操作を二度実行しない）。新しい世代で配り直す
-  MP.seen=Object.assign({},(g&&g.ak)||{});MP.lastA={};MP.epoch=MP.me+':'+(++MP.epN);
+  MP.seen=Object.assign(Object.create(null),(g&&g.ak)||{});MP.lastA=Object.create(null);MP.epoch=MP.me+':'+(++MP.epN);
   grng=mulberry32(seedFor(S.day)^S.orderNo);simClock=performance.now();simAcc=0;
   if(!DS)DS={served:0,lost:0,revenue:0,tips:0,waste:0,wrong:0,reviews:[],rating0:S.rating,spent:0,cleaned:0,returned:0,eatDone:0,turned:0};
   if(phase==='summary'&&g&&g.sum)MP.sum=g.sum;
@@ -2848,8 +2913,12 @@ function elect(){
   if(!MP.room)return;
   const ps=MP.room.peers().filter(p=>p.kind==='viewer'&&p.presence&&p.presence.pl);
   const me=MP.room.peers().find(p=>p.isMe&&p.sameTab);if(me)MP.me=me.peer;if(!MP.me)return;
-  const claims=ps.filter(p=>typeof p.presence.h==='number').sort((a,b)=>(a.presence.h-b.presence.h)||(a.peer<b.peer?-1:1));
-  const host=claims.length?claims[0].peer:(ps.map(p=>p.peer).sort()[0]||MP.me);
+  const claims=ps.filter(p=>SAFE.int(p.presence.h,1)).sort((a,b)=>(a.presence.h-b.presence.h)||(a.peer<b.peer?-1:1));
+  const present=ps.some(p=>p.peer===MP.host);
+  const pinned=present&&(MP.hostPinned||active()&&MP.host===MP.me);
+  const host=pinned?MP.host:claims.length?claims[0].peer:(ps.map(p=>p.peer).sort()[0]||MP.me);
+  const hostP=ps.find(p=>p.peer===host);
+  MP.hostPinned=ps.length>1&&(host===MP.me&&active()||!!(hostP&&SAFE.game(hostP.presence.g)));
   const wasHost=isHost();MP.host=host;
   if(host===MP.me&&!MP.hostClaim){MP.hostClaim=Date.now();MP.room.presence({h:MP.hostClaim}).catch(()=>{});}
   if(host!==MP.me&&MP.hostClaim){MP.hostClaim=0;MP.room.presence({h:null}).catch(()=>{});}
@@ -2864,7 +2933,7 @@ function onPeersLeft(left){
     if(isHost()&&MP.heldOf[p.peer]){const it=MP.heldOf[p.peer];delete MP.heldOf[p.peer];
       if(it.type==='bottle'){const i=SAUCES.indexOf(it.sauce);if(bottleStands[i])bottleStands[i].visible=true;}
       else if(active()){const pr=p.presence||{};addFree(isBunT(it.type)?{type:'stack',layers:pairOf(it.type)}:it,Math.max(-(HW-.6),Math.min(HW-.6,(pr.x||0)/100)),0,Math.max(-4.9,Math.min(FZ-.45,(pr.z||-140)/100)));}}
-    delete MP.seen[p.peer];delete MP.lastA[p.peer];
+    delete MP.seen[p.peer];delete MP.lastA[p.peer];delete MP.rates[p.peer];
   });
 }
 // --- 他のプレイヤーの姿 ---
@@ -2923,6 +2992,8 @@ function tickAvatars(dt){
   });
 }
 function updateMPStatus(){
+  syncPauseUI();
+  if(!isMultiplayer())$('#latencyPanel').hidden=true;
   if(phase==='title'){drawDiff();drawMode();}
   const el=$('#mpStatus');
   if(!MP.room){MP.statusSig='';el.textContent=window.BUNBUN_ROOM?'オンラインに接続できないため、ひとりで営業します。':'オンラインに接続できないため、ひとりで営業します。一緒に遊ぶには、Claudeにログインした状態で、共有から招待されたアカウントで開く必要があります（公開リンクやログインなしでは接続できません）。';return;}
@@ -2930,7 +3001,7 @@ function updateMPStatus(){
   const ps=MP.room.peers().filter(p=>p.kind==='viewer'&&p.presence&&p.presence.pl);
   const hostP=ps.find(p=>p.peer===MP.host),hn=hostP?String(hostP.presence.n||'スタッフ'):'';
   // 相手ごとの経路：P2P（直接）か中継（公開サーバー経由）か、往復時間
-  const link=p=>{if(p.peer===MP.me||!MP.room.link)return '';const l=MP.room.link(p.peer);if(!l)return '';return l.p2p?`直結 ${l.rtt}ms`:'中継';};
+  const link=p=>{if(p.peer===MP.me||!MP.room.link)return '';const l=MP.room.link(p.peer);if(!l)return '';return `${l.p2p?'直結':'中継'} ${Number.isFinite(l.rtt)?l.rtt+'ms':'測定中'}`;};
   const relay=ps.some(p=>p.peer!==MP.me&&MP.room.link&&MP.room.link(p.peer)&&!MP.room.link(p.peer).p2p);
   let txt=ps.length<=1?'オンライン：あなただけ。招待した人が同じページを開くと一緒に働けます。':`オンライン ${ps.length}人 ・ 店長：${isHost()?'あなた':hn}`;
   if(ps.length>1&&MP.room.link)txt+=relay?'（一部の人とは中継で通信中。直結できると遅延が減ります）':'（全員と直結）';
@@ -2948,8 +3019,8 @@ function updateMPStatus(){
 function clientPull(){
   if(!MP.room||!isClient())return;
   const hp=MP.room.peers().find(p=>p.peer===MP.host);
-  if(hp&&hp.presence.g&&hp.presence.g!==MP.lastG){MP.lastG=hp.presence.g;applyG(MP.lastG);}
-  if(MP.world){const wp=MP.world.peers().find(p=>p.peer===MP.host);if(wp&&wp.presence.w&&wp.presence.w!==MP.lastW){MP.lastW=wp.presence.w;applyW(MP.lastW);}}
+  if(hp&&hp.presence.g&&hp.presence.g!==MP.lastG&&SAFE.game(hp.presence.g)){MP.lastG=hp.presence.g;try{applyG(MP.lastG);}catch(e){console.warn('不正な店状態を破棄しました');}}
+  if(MP.world){const wp=MP.world.peers().find(p=>p.peer===MP.host);if(wp&&wp.presence.w&&wp.presence.w!==MP.lastW){MP.lastW=wp.presence.w;try{applyW(MP.lastW);}catch(e){console.warn('不正な配置状態を破棄しました');}}}
 }
 function mpTick(dt){
   if(!MP.room)return;
@@ -2959,6 +3030,19 @@ function mpTick(dt){
     const pos=active()?[Math.round(P.x*100),Math.round(P.z*100),Math.round(yaw*100),Math.round(MV.y*100),pk]:[0,0,0,0,0];const sig=pos.join()+active();
     if(sig!==MP.lastPos){MP.lastPos=sig;MP.room.presence(active()?{x:pos[0],z:pos[1],r:pos[2],y:pos[3],k:pos[4]}:{x:null,z:null,r:null,y:null,k:null}).catch(()=>{});}}
   tickAvatars(dt);
+}
+let latencyAt=-Infinity;
+function drawLatency(){
+  const now=performance.now();if(now-latencyAt<250)return;latencyAt=now;
+  const box=$('#latencyRows');box.replaceChildren();
+  roomPlayers().forEach(p=>{
+    const row=document.createElement('div');row.className='net-row';
+    const name=document.createElement('span'),value=document.createElement('span');
+    name.textContent=String(p.presence.n||'スタッフ').slice(0,12)+(p.peer===MP.host?'（店長）':'');
+    const link=MP.room.link&&MP.room.link(p.peer);
+    value.textContent=p.peer===MP.me?'あなた':!link?'測定できません':`${link.p2p?'直結':'中継'} / ${Number.isFinite(link.rtt)?link.rtt+' ms':'測定中'}`;
+    row.append(name,value);box.append(row);
+  });
 }
 async function initMP(){
   if(!window.claude||!window.claude.use){updateMPStatus();return;}
@@ -2976,7 +3060,7 @@ initMP();
 if(window.BUNBUN_ROOM){
   $('#roomLine').hidden=false;$('#roomJoin').hidden=false;$('#roomCode').textContent=window.BUNBUN_ROOM;
   $('#roomJoin').addEventListener('submit',e=>{e.preventDefault();
-    const c=$('#roomInput').value.trim().replace(/[^a-z0-9]/gi,'').toLowerCase().slice(0,16);
+    const c=$('#roomInput').value.trim().replace(/[^a-z0-9]/gi,'').toLowerCase().slice(0,32);
     if(!c){showToast('ルーム番号を入力してください','bad');return;}
     if(c===window.BUNBUN_ROOM){showToast('もうこのルームに入っています');return;}
     location.href=location.pathname+'?room='+c;});
@@ -2984,7 +3068,7 @@ if(window.BUNBUN_ROOM){
     const ok=()=>showToast('招待リンクをコピーしました。一緒に遊ぶ人に送ってください','good');
     const fb=()=>{inp.hidden=false;inp.select();showToast('リンクを選択しました。コピーして送ってください');};
     try{navigator.clipboard.writeText(url).then(ok,fb);}catch(e){fb();}};
-  $('#btnNewRoom').onclick=()=>{location.href=location.pathname+'?room='+Math.random().toString(36).slice(2,8);};
+  $('#btnNewRoom').onclick=()=>{location.href=location.pathname+'?room='+SAFE.randomCode();};
 }
 // 描画とは別の時計で：進行（0.1秒毎）、裏タブ時の同期、店長の状態配信（10回/秒）。
 // 描画が重い端末でも、タブが裏にあっても、配信と進行は遅れない
@@ -3011,31 +3095,38 @@ function syncCfgUI(){
   $('#optScale').value=CFG.scale;$('#valScale').textContent=Math.round(CFG.scale*100)+'%';
   $('#optShadows').checked=CFG.shadows;$('#optFps').checked=CFG.fps;$('#optSound').checked=CFG.sound;
   $('#optInfStock').checked=CFG.infStock;$('#optInfPat').checked=CFG.infPat;
-  $('#liveTag').hidden=!active();
+  syncPauseUI();
 }
 [['optSens','sens',parseFloat],['optFov','fov',parseFloat],['optScale','scale',parseFloat]].forEach(([id,k,f])=>$('#'+id).addEventListener('input',e=>{CFG[k]=f(e.target.value);syncCfgUI();applyCfg();saveCfg();}));
 [['optShadows','shadows'],['optFps','fps'],['optSound','sound'],['optInfStock','infStock'],['optInfPat','infPat']].forEach(([id,k])=>$('#'+id).addEventListener('change',e=>{CFG[k]=e.target.checked;applyCfg();saveCfg();
   if(k==='infStock'||k==='infPat')toast(`${k==='infStock'?'在庫無限':'待ち時間無限'}を${CFG[k]?'オン':'オフ'}にしました`);}));
 function openSettings(){
-  rebind=null;uiOpen=true;setOpenAt=performance.now();syncCfgUI();$('#settings').hidden=false;
+  pump(); // 開く直前までの時間を確定する
+  $('#latencyPanel').hidden=true;
+  rebind=null;uiOpen=true;syncCfgUI();$('#settings').hidden=false;
   if(document.pointerLockElement)document.exitPointerLock();
-  for(const k in keys)keys[k]=false;
+  clearGameInput();syncPauseUI();
   setTimeout(()=>$('#btnCloseSet').focus(),0);
 }
 function closeSettings(){
+  pump(); // 停止中の経過時間を捨ててから再開する
   rebind=null;$('#settings').hidden=true;
   uiOpen=!$('#title').hidden||!$('#summary').hidden||!$('#tablet').hidden||!$('#endScr').hidden;
-  if(active()&&!uiOpen)lock();
+  syncPauseUI();
+  if(active()&&!uiOpen&&!gamePaused())lock();
+}
+function syncPauseUI(){
+  $('#liveTag').hidden=!active();$('#liveTag').textContent=gamePaused()?'一時停止中':'ゲーム進行中';
 }
 function drawKeyList(){
   const L=$('#keyList');L.innerHTML='';
-  Object.keys(KEY_DEF).forEach(k=>{const sp=document.createElement('span');sp.textContent=KEY_N[k];const bt=document.createElement('button');
+  Object.keys(KEY_DEF).filter(k=>k!=='settings'&&k!=='latency').forEach(k=>{const sp=document.createElement('span');sp.textContent=KEY_N[k];const bt=document.createElement('button');
     bt.textContent=rebind===k?'キーを押す…':keyLabel(CFG.keys[k]);if(rebind===k)bt.className='wait';
     bt.onclick=()=>{rebind=k;drawKeyList();};L.append(sp,bt);});
 }
 function drawKeyHint(){
   const K=CFG.keys,kb=c=>`<kbd>${keyLabel(c)}</kbd>`;
-  $('#keys').innerHTML=`${kb(K.fwd)}${kb(K.left)}${kb(K.back)}${kb(K.right)} 移動 ${kb(K.dash)} ダッシュ ${kb(K.crouch)} しゃがむ ${kb(K.jump)} ジャンプ<br>${kb(K.use)}/クリック 使う・置く ${kb(K.undo)}/右クリック 具材を戻す ${kb(K.wrap)} 包む ${kb(K.settings)} 設定 ${kb(K.full)} 全画面`;
+  $('#keys').innerHTML=`${kb(K.fwd)}${kb(K.left)}${kb(K.back)}${kb(K.right)} 移動 ${kb(K.dash)} ダッシュ ${kb(K.crouch)} しゃがむ ${kb(K.jump)} ジャンプ<br>${kb(K.use)}/クリック 使う・置く ${kb(K.undo)}/右クリック 具材を戻す ${kb(K.wrap)} 包む ${kb(K.settings)} 設定 ${kb(K.latency)} 通信状況 ${kb(K.full)} 全画面`;
 }
 $('#btnKeyReset').onclick=()=>{CFG.keys=Object.assign({},KEY_DEF);rebind=null;saveCfg();drawKeyList();drawKeyHint();};
 $('#btnFull').onclick=()=>toggleFullscreen();
